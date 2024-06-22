@@ -1,0 +1,7 @@
+{
+    "TrainTestCreator": "TrainTestCreator01_ManualCenteredSampling",
+    "set_num": 8,
+    "num_test_videos": 4,
+    "num_validation_videos": 1,
+    "num_train_videos": 4
+}
