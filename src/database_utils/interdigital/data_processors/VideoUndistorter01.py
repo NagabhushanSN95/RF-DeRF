@@ -16,7 +16,7 @@ from pathlib import Path
 from tqdm import tqdm
 from matplotlib import pyplot
 
-from pose_warping.Warper import Warper
+from database_utils.interdigital.libraries.pose_warping.Warper import Warper
 
 this_filepath = Path(__file__)
 this_filename = this_filepath.stem

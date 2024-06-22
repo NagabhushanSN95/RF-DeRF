@@ -1,0 +1,12 @@
+{
+    "generator": "FlowEstimator_N3DV01/VideoFramesMatcher02/ImagesMatcher04",
+    "gen_num": 5,
+    "gen_set_num": 5,
+    "database_name": "N3DV",
+    "database_dirpath": "N3DV/data",
+    "camera_suffix": "",
+    "resolution_suffix": "_down2",
+    "shifts": [
+        10
+    ]
+}

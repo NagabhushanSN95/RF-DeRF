@@ -1,0 +1,12 @@
+{
+    "generator": "FlowEstimator_ID01/VideoFramesMatcher02/ImagesMatcher04",
+    "gen_num": 4,
+    "gen_set_num": 4,
+    "database_name": "InterDigital",
+    "database_dirpath": "InterDigital/data",
+    "camera_suffix": "_undistorted",
+    "resolution_suffix": "_down2",
+    "shifts": [
+        10
+    ]
+}

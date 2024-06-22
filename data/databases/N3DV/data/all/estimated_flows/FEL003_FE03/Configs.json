@@ -1,0 +1,13 @@
+{
+    "generator": "FlowEstimator_N3DV01/FlowEstimator01",
+    "gen_num": 3,
+    "gen_set_num": 3,
+    "model_path": "PaperModels/raft-sintel.pth",
+    "database_name": "N3DV",
+    "database_dirpath": "N3DV/data",
+    "camera_suffix": "",
+    "resolution_suffix": "_down2",
+    "shifts": [
+        10
+    ]
+}
