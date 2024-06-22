@@ -9,7 +9,7 @@ import torchvision.transforms
 from PIL import Image
 import imageio.v3 as iio
 
-from plenoxels.utils.my_tqdm import tqdm
+from utils.my_tqdm import tqdm
 
 pil2tensor = torchvision.transforms.ToTensor()
 # increase ulimit -n (number of open files) otherwise parallel loading might fail
@@ -93,6 +93,8 @@ def _parallel_loader_nerf_image_pose(args):
 def _load_video_1cam(idx: int,
                      paths: List[str],
                      poses: torch.Tensor,
+                     intrinsics: torch.Tensor,
+                     num_frames: int,
                      out_h: int,
                      out_w: int,
                      load_every: int = 1
@@ -107,7 +109,7 @@ def _load_video_1cam(idx: int,
     for frame_idx, frame in enumerate(all_frames):
         if frame_idx % load_every != 0:
             continue
-        if frame_idx >= 300:  # Only look at the first 10 seconds
+        if frame_idx >= num_frames:  # Only look at the first 10 seconds
             break
         # Frame is np.ndarray in uint8 dtype (H, W, C)
         imgs.append(
@@ -118,6 +120,7 @@ def _load_video_1cam(idx: int,
     med_img, _ = torch.median(imgs, dim=0)  # [h, w, 3]
     return (imgs,
             poses[idx].expand(len(timestamps), -1, -1),
+            intrinsics[idx].expand(len(timestamps), -1, -1),
             med_img,
             torch.tensor(timestamps, dtype=torch.int32))
 

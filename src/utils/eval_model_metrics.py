@@ -7,8 +7,8 @@ from collections import defaultdict
 import numpy as np
 import torch
 
-from plenoxels.ops.image import metrics
-from plenoxels.ops.image.io import read_mp4, read_png
+from ops.image import metrics
+from ops.image.io import read_mp4, read_png
 
 
 def eval_static_metrics(static_dir):

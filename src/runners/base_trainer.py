@@ -4,21 +4,22 @@ import logging as log
 import math
 import os
 from copy import copy
-from typing import Iterable, Optional, Union, Dict, Tuple, Sequence, MutableMapping
+from pathlib import Path
+from typing import Iterable, Optional, Union, Dict, Tuple, Sequence, MutableMapping, List
 
 import numpy as np
 import torch
 import torch.utils.data
 from torch.utils.tensorboard import SummaryWriter
 
-from plenoxels.utils.timer import CudaTimer
-from plenoxels.utils.ema import EMA
-from plenoxels.models.lowrank_model import LowrankModel
-from plenoxels.utils.my_tqdm import tqdm
-from plenoxels.ops.image import metrics
-from plenoxels.ops.image.io import write_png
-from plenoxels.runners.regularization import Regularizer
-from plenoxels.ops.lr_scheduling import (
+from utils.timer import CudaTimer
+from utils.ema import EMA
+from models.lowrank_model import LowrankModel
+from utils.my_tqdm import tqdm
+from ops.image import metrics
+from ops.image.io import write_png
+from runners.regularization import Regularizer
+from ops.lr_scheduling import (
     get_cosine_schedule_with_warmup, get_step_schedule_with_warmup
 )
 
@@ -77,16 +78,17 @@ class BaseTrainer(abc.ABC):
         with torch.cuda.amp.autocast(enabled=self.train_fp16):
             fwd_out = self.model(
                 data['rays_o'], data['rays_d'], bg_color=data['bg_color'],
-                near_far=data['near_fars'], timestamps=data['timestamps'])
+                near_far=data['near_fars'], timestamps=data['timestamps']
+            )
             self.timer.check("model-forward")
             # Reconstruction loss
             recon_loss = self.criterion(fwd_out['rgb'], data['imgs'])
             # Regularization
             loss = recon_loss
             for r in self.regularizers:
-                reg_loss = r.regularize(self.model, model_out=fwd_out)
+                reg_loss = r.regularize(self.model, model_out=fwd_out, data=data)
                 loss = loss + reg_loss
-            self.timer.check("regularizaion-forward")
+            self.timer.check("regularization-forward")
         # Update weights
         self.optimizer.zero_grad(set_to_none=True)
         self.gscaler.scale(loss).backward()
@@ -103,7 +105,7 @@ class BaseTrainer(abc.ABC):
                 self.loss_info[f"mse"].update(recon_loss_val)
                 self.loss_info[f"psnr"].update(-10 * math.log10(recon_loss_val))
                 for r in self.regularizers:
-                    r.report(self.loss_info)
+                    r.report(self.loss_info)  # TODO SNB: check if loss weights are included in this report
 
         return scale <= self.gscaler.get_scale()
 
@@ -123,12 +125,13 @@ class BaseTrainer(abc.ABC):
                     tstr += f"tot={tsum:.1f}ms"
                     log.info(tstr)
         progress_bar.update(1)
-        if self.valid_every > -1 and self.global_step % self.valid_every == 0:
-            print()
-            self.validate()
         if self.save_every > -1 and self.global_step % self.save_every == 0:
             print()
             self.save_model()
+            # self.save_model(self.global_step)
+        if self.valid_every > -1 and self.global_step % self.valid_every == 0:
+            print()
+            self.validate()
 
     def pre_epoch(self):
         self.loss_info = self.init_epoch_info()
@@ -185,7 +188,20 @@ class BaseTrainer(abc.ABC):
         if isinstance(bg_color, torch.Tensor):
             bg_color = bg_color.to(self.device)
         data["bg_color"] = bg_color
+
+        # Data related to sparse flow, dense flow and sparse depth
+        self._move_data_to_device_if_exists(data, [
+            'video_ids', 'extrinsics1_c2w', 'extrinsics2_c2w', 'sparse_flow_mask', 'dense_flow_mask', 'video1_num', 'frame1_num', 'video2_num', 'frame2_num',
+            'timestamps2', 'x1', 'y1', 'x2', 'y2', 'sparse_depth_mask', 'sparse_depth'
+        ], self.device)
         return data
+
+    @staticmethod
+    def _move_data_to_device_if_exists(data, keys: List[str], device):
+        for key in keys:
+            if key in data:
+                data[key] = data[key].to(device)
+        return
 
     def _normalize_err(self, preds: torch.Tensor, gt: torch.Tensor) -> torch.Tensor:
         err = torch.abs(preds - gt)
@@ -210,12 +226,13 @@ class BaseTrainer(abc.ABC):
 
         err = (gt - preds) ** 2
         return {
-            "mse": torch.mean(err),
-            "psnr": metrics.psnr(preds, gt),
-            "ssim": metrics.ssim(preds, gt),
-            "ms-ssim": metrics.msssim(preds, gt),
-            #"alex_lpips": metrics.rgb_lpips(preds, gt, net_name='alex', device=err.device),
-            #"vgg_lpips": metrics.rgb_lpips(preds, gt, net_name='vgg', device=err.device)
+            "MSE": torch.mean(err),
+            "RMSE": torch.sqrt(torch.mean(err)),
+            "PSNR": metrics.psnr(preds, gt),
+            "SSIM": metrics.ssim(preds, gt),
+            "MS_SSIM": metrics.msssim(preds, gt),
+            "LPIPS_Alex": metrics.rgb_lpips(preds, gt, net_name='alex', device=err.device),
+            "LPIPS_VGG": metrics.rgb_lpips(preds, gt, net_name='vgg', device=err.device)
         }
 
     def evaluate_metrics(self,
@@ -264,10 +281,14 @@ class BaseTrainer(abc.ABC):
         out_img_np: np.ndarray = (out_img * 255.0).byte().numpy()
         out_depth_np: Optional[np.ndarray] = None
         if out_depth is not None:
-            out_depth = self._normalize_01(out_depth)
-            out_depth_np = (out_depth * 255.0).repeat(1, 1, 3).byte().numpy()
+            # Change by SNB: We want to save the original depth maps also, not just normalized images. So, depth maps
+            #  are returned as it is.
+            # out_depth = self._normalize_01(out_depth)
+            # out_depth_np = (out_depth * 255.0).repeat(1, 1, 3).byte().numpy()
+            out_depth_np = out_depth.numpy()
 
         if save_outputs:
+            # TODO SNB: Check why this code is not getting executed.
             out_name = f"step{self.global_step}-{img_idx}"
             if name is not None and name != "":
                 out_name += "-" + name
@@ -304,10 +325,12 @@ class BaseTrainer(abc.ABC):
             "global_step": self.global_step
         }
 
-    def save_model(self):
-        model_fname = os.path.join(self.log_dir, f'model.pth')
-        log.info(f'Saving model checkpoint to: {model_fname}')
-        torch.save(self.get_save_dict(), model_fname)
+    def save_model(self, iter_num=None):
+        model_name = 'model.pth' if iter_num is None else f'model_{iter_num:06}.pth'
+        model_filepath = Path(self.log_dir) / f'saved_models/{model_name}'
+        model_filepath.parent.mkdir(parents=True, exist_ok=True)
+        log.info(f'Saving model checkpoint to: {model_filepath.as_posix()}')
+        torch.save(self.get_save_dict(), model_filepath.as_posix())
 
     def load_model(self, checkpoint_data, training_needed: bool = True):
         self.model.load_state_dict(checkpoint_data["model"], strict=False)

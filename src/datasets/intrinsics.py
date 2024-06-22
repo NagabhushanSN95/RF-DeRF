@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+import numpy
 
 
 @dataclass
@@ -21,6 +22,13 @@ class Intrinsics:
         self.center_y *= sh
         self.width = int(nw)
         self.height = int(nh)
+
+    def to_matrix(self):
+        return numpy.array([
+            [self.focal_x, 0, self.center_x],
+            [0, self.focal_y, self.center_y],
+            [0, 0, 1]
+        ])
 
     def __repr__(self):
         return (f"Intrinsics(width={self.width}, height={self.height}, "

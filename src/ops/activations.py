@@ -36,3 +36,14 @@ def init_density_activation(activation_type: str):
         return F.relu
     else:
         raise ValueError(activation_type)
+
+
+def init_flow_activation(activation_type: str):
+    if activation_type == 'trunc_exp':
+        return lambda x: trunc_exp(x - 1)
+    elif activation_type == 'relu':
+        return F.relu
+    elif activation_type == 'tanh':
+        return F.tanh
+    else:
+        raise ValueError(activation_type)

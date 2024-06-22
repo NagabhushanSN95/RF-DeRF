@@ -6,8 +6,8 @@ import torch
 import torch.nn as nn
 import tinycudann as tcnn
 
-from plenoxels.ops.interpolation import grid_sample_wrapper
-from plenoxels.raymarching.spatial_distortions import SpatialDistortion
+from ops.interpolation import grid_sample_wrapper
+from raymarching.spatial_distortions import SpatialDistortion
 
 
 def get_normalized_directions(directions):
@@ -21,6 +21,11 @@ def get_normalized_directions(directions):
 
 def normalize_aabb(pts, aabb):
     return (pts - aabb[0]) * (2.0 / (aabb[1] - aabb[0])) - 1.0
+
+
+def unnormalize_aabb(norm_pts, aabb):
+    pts = (norm_pts + 1.0) / 2 * (aabb[1] - aabb[0]) + aabb[0]
+    return pts
 
 
 def init_grid_param(
@@ -88,7 +93,7 @@ class KPlaneField(nn.Module):
     def __init__(
         self,
         aabb,
-        grid_config: Union[str, List[Dict]],
+        grid_config: Dict,
         concat_features_across_scales: bool,
         multiscale_res: Optional[Sequence[int]],
         use_appearance_embedding: bool,
@@ -98,6 +103,7 @@ class KPlaneField(nn.Module):
         linear_decoder: bool,
         linear_decoder_layers: Optional[int],
         num_images: Optional[int],
+        time_dependent_color: bool,
     ) -> None:
         super().__init__()
 
@@ -115,7 +121,7 @@ class KPlaneField(nn.Module):
         self.feature_dim = 0
         for res in self.multiscale_res_multipliers:
             # initialize coordinate grid
-            config = self.grid_config[0].copy()
+            config = self.grid_config.copy()
             # Resolution fix: multi-res only on spatial planes
             config["resolution"] = [
                 r * res for r in config["resolution"][:3]
@@ -155,6 +161,19 @@ class KPlaneField(nn.Module):
                 "degree": 4,
             },
         )
+
+        self.time_dependent_color = time_dependent_color
+        if self.time_dependent_color:
+            self.time_encoder = tcnn.Encoding(
+                n_input_dims=1,
+                encoding_config={
+                    "otype": "Frequency",
+                    "n_frequencies": 4,
+                },
+            )
+            self.timestamps_encoding_dim = self.time_encoder.n_output_dims
+        else:
+            self.timestamps_encoding_dim = 0
 
         # 3. Init decoder network
         if self.linear_decoder:
@@ -203,6 +222,7 @@ class KPlaneField(nn.Module):
                     self.direction_encoder.n_output_dims
                     + self.geo_feat_dim
                     + self.appearance_embedding_dim
+                    + self.timestamps_encoding_dim
             )
             self.color_net = tcnn.Network(
                 n_input_dims=self.in_dim_color,
@@ -215,8 +235,9 @@ class KPlaneField(nn.Module):
                     "n_hidden_layers": 2,
                 },
             )
+        return
 
-    def get_density(self, pts: torch.Tensor, timestamps: Optional[torch.Tensor] = None):
+    def get_density(self, pts: torch.Tensor):
         """Computes and returns the densities."""
         if self.spatial_distortion is not None:
             pts = self.spatial_distortion(pts)
@@ -224,14 +245,11 @@ class KPlaneField(nn.Module):
         else:
             pts = normalize_aabb(pts, self.aabb)
         n_rays, n_samples = pts.shape[:2]
-        if timestamps is not None:
-            timestamps = timestamps[:, None].expand(-1, n_samples)[..., None]  # [n_rays, n_samples, 1]
-            pts = torch.cat((pts, timestamps), dim=-1)  # [n_rays, n_samples, 4]
 
         pts = pts.reshape(-1, pts.shape[-1])
         features = interpolate_ms_features(
             pts, ms_grids=self.grids,  # noqa
-            grid_dimensions=self.grid_config[0]["grid_dimensions"],
+            grid_dimensions=self.grid_config["grid_dimensions"],
             concat_features=self.concat_features, num_levels=None)
         if len(features) < 1:
             features = torch.zeros((0, 1)).to(features.device)
@@ -257,18 +275,24 @@ class KPlaneField(nn.Module):
                 raise AttributeError("timestamps (appearance-ids) are not provided.")
             camera_indices = timestamps
             timestamps = None
-        density, features = self.get_density(pts, timestamps)
+        density, features = self.get_density(pts)
         n_rays, n_samples = pts.shape[:2]
 
         directions = directions.view(-1, 1, 3).expand(pts.shape).reshape(-1, 3)
         if not self.linear_decoder:
             directions = get_normalized_directions(directions)
             encoded_directions = self.direction_encoder(directions)
+        timestamps = timestamps.view(-1, 1, 1).expand(pts[:, :, :1].shape).reshape(-1, 1)
+        if self.time_dependent_color:
+            encoded_timestamps = self.time_encoder(timestamps)
 
         if self.linear_decoder:
             color_features = [features]
         else:
-            color_features = [encoded_directions, features.view(-1, self.geo_feat_dim)]
+            if not self.time_dependent_color:
+                color_features = [encoded_directions, features.view(-1, self.geo_feat_dim)]
+            else:
+                color_features = [encoded_directions, encoded_timestamps, features.view(-1, self.geo_feat_dim)]
 
         if self.use_appearance_embedding:
             if camera_indices.dtype == torch.float32:
@@ -327,6 +351,163 @@ class KPlaneField(nn.Module):
             nn_params.append(self.color_basis.named_parameters(prefix="color_basis"))
         else:
             nn_params.append(self.color_net.named_parameters(prefix="color_net"))
+        if self.time_dependent_color:
+            nn_params.append(self.time_encoder.named_parameters(prefix="time_encoder"))
+        nn_params = {k: v for plist in nn_params for k, v in plist}
+        other_params = {k: v for k, v in self.named_parameters() if (
+            k not in nn_params.keys() and k not in field_params.keys()
+        )}
+        return {
+            "nn": list(nn_params.values()),
+            "field": list(field_params.values()),
+            "other": list(other_params.values()),
+        }
+
+
+# Only override the forward function
+class FlowField(nn.Module):
+    def __init__(
+        self,
+        aabb,
+        grid_config: Dict,
+        concat_features_across_scales: bool,
+        multiscale_res: Optional[Sequence[int]],
+        use_appearance_embedding: bool,
+        appearance_embedding_dim: int,
+        spatial_distortion: Optional[SpatialDistortion],
+        flow_activation: Callable,
+        linear_decoder: bool,
+        linear_decoder_layers: Optional[int],
+        num_images: Optional[int],
+        canonical_time: float,
+    ) -> None:
+        super().__init__()
+
+        self.aabb = nn.Parameter(aabb, requires_grad=False)
+        self.spatial_distortion = spatial_distortion
+        self.grid_config = grid_config
+
+        self.multiscale_res_multipliers: List[int] = multiscale_res or [1]
+        self.concat_features = concat_features_across_scales
+        self.flow_activation = flow_activation
+        self.linear_decoder = linear_decoder
+
+        # 1. Init planes
+        self.grids = nn.ModuleList()
+        self.feature_dim = 0
+        for res in self.multiscale_res_multipliers:
+            # initialize coordinate grid
+            config = self.grid_config.copy()
+            # Resolution fix: multi-res only on spatial planes
+            config["resolution"] = [
+                r * res for r in config["resolution"][:3]
+            ] + config["resolution"][3:]
+            gp = init_grid_param(
+                grid_nd=config["grid_dimensions"],
+                in_dim=config["input_coordinate_dim"],
+                out_dim=config["output_coordinate_dim"],
+                reso=config["resolution"],
+            )
+            # shape[1] is out-dim - Concatenate over feature len for each scale
+            if self.concat_features:
+                self.feature_dim += gp[-1].shape[1]
+            else:
+                self.feature_dim = gp[-1].shape[1]
+            self.grids.append(gp)
+        log.info(f"Initialized model grids: {self.grids}")
+
+        # 2. Init appearance code-related parameters
+        self.use_average_appearance_embedding = True  # for test-time
+        self.use_appearance_embedding = use_appearance_embedding
+        self.num_images = num_images
+        self.appearance_embedding = None
+        if use_appearance_embedding:
+            assert self.num_images is not None
+            self.appearance_embedding_dim = appearance_embedding_dim
+            # this will initialize as normal_(0.0, 1.0)
+            self.appearance_embedding = nn.Embedding(self.num_images, self.appearance_embedding_dim)
+        else:
+            self.appearance_embedding_dim = 0
+
+        # 3. Init decoder params
+        # self.direction_encoder = tcnn.Encoding(
+        #     n_input_dims=3,
+        #     encoding_config={
+        #         "otype": "SphericalHarmonics",
+        #         "degree": 4,
+        #     },
+        # )
+
+        # 3. Init decoder network
+        if self.linear_decoder:
+            assert linear_decoder_layers is not None
+            self.flow_net = tcnn.Network(
+                n_input_dims=self.feature_dim,
+                n_output_dims=3,
+                network_config={
+                    "otype": "CutlassMLP",
+                    "activation": "None",
+                    "output_activation": "None",
+                    "n_neurons": 128,
+                    "n_hidden_layers": 0,
+                },
+            )
+        else:
+            self.flow_net = tcnn.Network(
+                n_input_dims=self.feature_dim,
+                n_output_dims=3,
+                network_config={
+                    "otype": "CutlassMLP",
+                    "activation": "None",
+                    "output_activation": "None",
+                    "n_neurons": 128,
+                    "n_hidden_layers": 0,
+                },
+            )
+
+        # 5. Our params
+        self.canonical_time = canonical_time
+        return
+
+    def get_displaced_points(self, pts: torch.Tensor, timestamps: torch.Tensor):
+        """Computes and returns the densities."""
+        if self.spatial_distortion is not None:
+            pts = self.spatial_distortion(pts)
+            pts = pts / 2  # from [-2, 2] to [-1, 1]
+        else:
+            pts = normalize_aabb(pts, self.aabb)
+        n_rays, n_samples = pts.shape[:2]
+        timestamps = timestamps[:, None].expand(-1, n_samples)[..., None]  # [n_rays, n_samples, 1]
+        pts = torch.cat((pts, timestamps), dim=-1)  # [n_rays, n_samples, 4]
+
+        pts = pts.reshape(-1, pts.shape[-1])
+        features = interpolate_ms_features(
+            pts, ms_grids=self.grids,  # noqa
+            grid_dimensions=self.grid_config["grid_dimensions"],
+            concat_features=self.concat_features, num_levels=None)
+        if len(features) < 1:
+            features = torch.zeros((0, 1)).to(features.device)
+        flow = self.flow_activation(self.flow_net(features))
+
+        # No motion for points at canonical time instant
+        flow = torch.where(timestamps.reshape(-1, timestamps.shape[-1]) == self.canonical_time, torch.zeros_like(flow), flow)
+
+        displaced_points_norm = (pts[..., :3] + flow).view(n_rays, n_samples, 3)
+        displaced_points = unnormalize_aabb(displaced_points_norm, self.aabb)
+        return displaced_points
+
+    def forward(self,
+                pts: torch.Tensor,
+                timestamps: Optional[torch.Tensor] = None):
+        displaced_points = self.get_displaced_points(pts, timestamps)
+        return {"displaced_points": displaced_points}
+
+    def get_params(self):
+        field_params = {k: v for k, v in self.grids.named_parameters(prefix="grids")}
+        nn_params = [
+            self.flow_net.named_parameters(prefix="flow_net"),
+            # self.direction_encoder.named_parameters(prefix="direction_encoder"),
+        ]
         nn_params = {k: v for plist in nn_params for k, v in plist}
         other_params = {k: v for k, v in self.named_parameters() if (
             k not in nn_params.keys() and k not in field_params.keys()

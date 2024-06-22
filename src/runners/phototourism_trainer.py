@@ -8,11 +8,11 @@ import pandas as pd
 import torch
 import torch.utils.data
 
-from plenoxels.datasets.phototourism_dataset import PhotoTourismDataset
-from plenoxels.utils.ema import EMA
-from plenoxels.models.lowrank_model import LowrankModel
-from plenoxels.utils.my_tqdm import tqdm
-from plenoxels.ops.image import metrics
+from datasets.phototourism_dataset import PhotoTourismDataset
+from utils.ema import EMA
+from models.lowrank_model import LowrankModel
+from utils.my_tqdm import tqdm
+from ops.image import metrics
 from .base_trainer import BaseTrainer, init_dloader_random, initialize_model
 from .regularization import (
     PlaneTV, TimeSmoothness, HistogramLoss, L1TimePlanes, DistortionLoss

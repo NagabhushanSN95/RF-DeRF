@@ -4,20 +4,20 @@ import numpy as np
 import torch
 import torch.nn as nn
 
-from plenoxels.models.density_fields import KPlaneDensityField
-from plenoxels.models.kplane_field import KPlaneField
-from plenoxels.ops.activations import init_density_activation
-from plenoxels.raymarching.ray_samplers import (
+from models.density_fields import KPlaneDensityField
+from models.kplane_field import KPlaneField, FlowField
+from ops.activations import init_density_activation, init_flow_activation
+from raymarching.ray_samplers import (
     UniformLinDispPiecewiseSampler, UniformSampler,
     ProposalNetworkSampler, RayBundle, RaySamples
 )
-from plenoxels.raymarching.spatial_distortions import SceneContraction, SpatialDistortion
-from plenoxels.utils.timer import CudaTimer
+from raymarching.spatial_distortions import SceneContraction, SpatialDistortion
+from utils.timer import CudaTimer
 
 
 class LowrankModel(nn.Module):
     def __init__(self,
-                 grid_config: Union[str, List[Dict]],
+                 grid_config: Union[str, Dict[str, Dict]],
                  # boolean flags
                  is_ndc: bool,
                  is_contracted: bool,
@@ -25,6 +25,7 @@ class LowrankModel(nn.Module):
                  # Model arguments
                  multiscale_res: Sequence[int],
                  density_activation: Optional[str] = 'trunc_exp',
+                 flow_activation: Optional[str] = 'tanh',
                  concat_features_across_scales: bool = False,
                  linear_decoder: bool = True,
                  linear_decoder_layers: Optional[int] = 1,
@@ -47,13 +48,15 @@ class LowrankModel(nn.Module):
                  use_appearance_embedding: bool = False,
                  appearance_embedding_dim: int = 0,
                  num_images: Optional[int] = None,
+                 canonical_time: int = 0,
+                 time_dependent_color: bool = False,
                  **kwargs,
                  ):
         super().__init__()
         if isinstance(grid_config, str):
-            self.config: List[Dict] = eval(grid_config)
+            self.config: Dict[str, Dict] = eval(grid_config)
         else:
-            self.config: List[Dict] = grid_config
+            self.config: Dict[str, Dict] = grid_config
         self.multiscale_res = multiscale_res
         self.is_ndc = is_ndc
         self.is_contracted = is_contracted
@@ -61,6 +64,9 @@ class LowrankModel(nn.Module):
         self.linear_decoder = linear_decoder
         self.linear_decoder_layers = linear_decoder_layers
         self.density_act = init_density_activation(density_activation)
+        self.flow_act = init_flow_activation(flow_activation)
+        self.canonical_time = canonical_time
+        self.time_dependent_color = time_dependent_color
         self.timer = CudaTimer(enabled=False)
 
         self.spatial_distortion: Optional[SpatialDistortion] = None
@@ -69,9 +75,9 @@ class LowrankModel(nn.Module):
                 order=float('inf'), global_scale=global_scale,
                 global_translation=global_translation)
 
-        self.field = KPlaneField(
+        self.field_3d = KPlaneField(
             aabb,
-            grid_config=self.config,
+            grid_config=self.config['model_3d'],
             concat_features_across_scales=self.concat_features_across_scales,
             multiscale_res=self.multiscale_res,
             use_appearance_embedding=use_appearance_embedding,
@@ -81,6 +87,22 @@ class LowrankModel(nn.Module):
             linear_decoder=self.linear_decoder,
             linear_decoder_layers=self.linear_decoder_layers,
             num_images=num_images,
+            time_dependent_color=time_dependent_color,
+        )
+
+        self.field_bf = FlowField(
+            aabb,
+            grid_config=self.config['model_bf'],
+            concat_features_across_scales=self.concat_features_across_scales,
+            multiscale_res=self.multiscale_res,
+            use_appearance_embedding=use_appearance_embedding,
+            appearance_embedding_dim=appearance_embedding_dim,
+            spatial_distortion=self.spatial_distortion,
+            flow_activation=self.flow_act,
+            linear_decoder=self.linear_decoder,
+            linear_decoder_layers=self.linear_decoder_layers,
+            num_images=num_images,
+            canonical_time=canonical_time
         )
 
         # Initialize proposal-sampling nets
@@ -165,7 +187,7 @@ class LowrankModel(nn.Module):
         accumulation = torch.sum(weights, dim=-2)
         return accumulation
 
-    def forward(self, rays_o, rays_d, bg_color, near_far: torch.Tensor, timestamps=None):
+    def forward(self, rays_o, rays_d, bg_color, near_far: torch.Tensor, timestamps):
         """
         rays_o : [batch, 3]
         rays_d : [batch, 3]
@@ -186,10 +208,18 @@ class LowrankModel(nn.Module):
         ray_samples, weights_list, ray_samples_list = self.proposal_sampler.generate_ray_samples(
             ray_bundle, timestamps=timestamps, density_fns=self.density_fns)
 
-        field_out = self.field(ray_samples.get_positions(), ray_bundle.directions, timestamps)
-        rgb, density = field_out["rgb"], field_out["density"]
+        pi = ray_samples.get_positions()  # (nr, ns, 3)
 
-        weights = ray_samples.get_weights(density)
+        # Flow is not a function of directions
+        # timestamps_static = -1 * torch.ones_like(timestamps)
+        bwd_flow_dict = self.field_bf(pi, timestamps=timestamps)
+        pi_prime = bwd_flow_dict['displaced_points']  # (nr, ns, 3)
+
+        # Provide timestamps to the 3d model if color has to be predicted as a function of time
+        field_3d_dict = self.field_3d(pi_prime, ray_bundle.directions, timestamps)
+        rgb, density = field_3d_dict["rgb"], field_3d_dict["density"]
+
+        weights = ray_samples.get_weights(density)  # (nr, ns, 1)
         weights_list.append(weights)
         ray_samples_list.append(ray_samples)
 
@@ -206,17 +236,23 @@ class LowrankModel(nn.Module):
         if self.training:
             outputs["weights_list"] = weights_list
             outputs["ray_samples_list"] = ray_samples_list
+
+            # Include all the points to compute sparse flow loss.
+            outputs['weights'] = weights
+            outputs['pi'] = pi
+            outputs['pi_prime'] = pi_prime
         for i in range(self.num_proposal_iterations):
             outputs[f"prop_depth_{i}"] = self.render_depth(
                 weights=weights_list[i], ray_samples=ray_samples_list[i], rays_d=ray_bundle.directions)
         return outputs
 
     def get_params(self, lr: float):
-        model_params = self.field.get_params()
+        model_3d_params = self.field_3d.get_params()
+        model_bf_params = self.field_bf.get_params()
         pn_params = [pn.get_params() for pn in self.proposal_networks]
-        field_params = model_params["field"] + [p for pnp in pn_params for p in pnp["field"]]
-        nn_params = model_params["nn"] + [p for pnp in pn_params for p in pnp["nn"]]
-        other_params = model_params["other"] + [p for pnp in pn_params for p in pnp["other"]]
+        field_params = model_3d_params["field"] + model_bf_params["field"] + [p for pnp in pn_params for p in pnp["field"]]
+        nn_params = model_3d_params["nn"] + model_bf_params["nn"] + [p for pnp in pn_params for p in pnp["nn"]]
+        other_params = model_3d_params["other"] + model_bf_params["other"] + [p for pnp in pn_params for p in pnp["other"]]
         return [
             {"params": field_params, "lr": lr},
             {"params": nn_params, "lr": lr},

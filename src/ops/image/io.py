@@ -2,7 +2,7 @@ import glob
 import os
 from typing import List, Optional
 
-import cv2
+# import cv2
 import torch
 import torchvision.transforms.functional as TF
 from PIL import Image

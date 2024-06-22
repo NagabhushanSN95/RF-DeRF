@@ -1,6 +1,6 @@
 from abc import ABC
 import os
-from typing import Optional, List, Union
+from typing import Optional, List, Union, Tuple
 
 import torch
 from torch.utils.data import Dataset
@@ -18,6 +18,7 @@ class BaseDataset(Dataset, ABC):
                  rays_o: Optional[torch.Tensor],
                  rays_d: Optional[torch.Tensor],
                  intrinsics: Union[Intrinsics, List[Intrinsics]],
+                 resolution: Tuple[int, int],
                  batch_size: Optional[int] = None,
                  imgs: Optional[Union[torch.Tensor, List[torch.Tensor]]] = None,
                  sampling_weights: Optional[torch.Tensor] = None,
@@ -44,6 +45,7 @@ class BaseDataset(Dataset, ABC):
             self.num_samples = None
             #raise RuntimeError("Can't figure out num_samples.")
         self.intrinsics = intrinsics
+        self.resolution = resolution
         self.sampling_weights = sampling_weights
         if self.sampling_weights is not None:
             assert len(self.sampling_weights) == self.num_samples, (
@@ -58,15 +60,17 @@ class BaseDataset(Dataset, ABC):
 
     @property
     def img_h(self) -> Union[int, List[int]]:
-        if isinstance(self.intrinsics, list):
-            return [i.height for i in self.intrinsics]
-        return self.intrinsics.height
+        # if isinstance(self.intrinsics, list):
+        #     return [i.height for i in self.intrinsics]
+        # return self.intrinsics.height
+        return self.resolution[0]
 
     @property
     def img_w(self) -> Union[int, List[int]]:
-        if isinstance(self.intrinsics, list):
-            return [i.width for i in self.intrinsics]
-        return self.intrinsics.width
+        # if isinstance(self.intrinsics, list):
+        #     return [i.width for i in self.intrinsics]
+        # return self.intrinsics.width
+        return self.resolution[1]
 
     def reset_iter(self):
         if self.sampling_weights is None and self.use_permutation:

@@ -8,9 +8,9 @@ import torch
 import torch.optim.lr_scheduler
 from torch import nn
 
-from plenoxels.models.lowrank_model import LowrankModel
-from plenoxels.ops.losses.histogram_loss import interlevel_loss
-from plenoxels.raymarching.ray_samplers import RaySamples
+from models.lowrank_model import LowrankModel
+from ops.losses.histogram_loss import interlevel_loss
+from raymarching.ray_samplers import RaySamples
 
 
 def compute_plane_tv(t):
@@ -73,7 +73,7 @@ class PlaneTV(Regularizer):
     def _regularize(self, model: LowrankModel, **kwargs):
         multi_res_grids: Sequence[nn.ParameterList]
         if self.what == 'field':
-            multi_res_grids = model.field.grids
+            multi_res_grids = model.field_3d.grids + model.field_bf.grids
         elif self.what == 'proposal_network':
             multi_res_grids = [p.grids for p in model.proposal_networks]
         else:
@@ -105,7 +105,7 @@ class TimeSmoothness(Regularizer):
     def _regularize(self, model: LowrankModel, **kwargs) -> torch.Tensor:
         multi_res_grids: Sequence[nn.ParameterList]
         if self.what == 'field':
-            multi_res_grids = model.field.grids
+            multi_res_grids = model.field_3d.grids + model.field_bf.grids
         elif self.what == 'proposal_network':
             multi_res_grids = [p.grids for p in model.proposal_networks]
         else:
@@ -209,7 +209,7 @@ class L1TimePlanes(Regularizer):
         # model.grids is 6 x [1, rank * F_dim, reso, reso]
         multi_res_grids: Sequence[nn.ParameterList]
         if self.what == 'field':
-            multi_res_grids = model.field.grids
+            multi_res_grids = model.field_3d.grids + model.field_bf.grids
         elif self.what == 'proposal_network':
             multi_res_grids = [p.grids for p in model.proposal_networks]
         else:
@@ -250,3 +250,97 @@ class DistortionLoss(Regularizer):
         loss_bi_1 = w[..., 1:] * wm_cumsum[..., :-1]
         loss_bi = 2 * (loss_bi_0 - loss_bi_1).sum(dim=-1).mean()
         return loss_bi + loss_uni
+
+
+class SparseFlowLoss(Regularizer):
+    def __init__(self, initial_value, threshold, sfap, sfwe, sf_stop_gradient_weights):
+        super().__init__('sparse-flow-loss', initial_value)
+        self.threshold = threshold
+        self.sfap = sfap
+        self.sfwe = sfwe
+        self.sf_stop_gradient_weights = sf_stop_gradient_weights
+        if sfap and sfwe:
+            raise RuntimeError('sparse_flow_loss_average_point and sparse_flow_loss_weighted_error both cannot be true')
+        return
+
+    def _regularize(self, model: LowrankModel, model_out, data, **kwargs) -> torch.Tensor:
+        sf_mask = data['sparse_flow_mask']
+        pi_prime = model_out['pi_prime'][sf_mask]  # (nr, ns, 3)
+        nr, ns = pi_prime.shape[:2]
+        weights = model_out['weights'][sf_mask]  # (nr, ns, 1)
+        if self.sf_stop_gradient_weights:
+            weights = weights.detach()
+        if self.sfap:
+            pi_prime = torch.sum(weights * pi_prime, dim=1, keepdim=True)  # (nr, 1, 3)
+
+        pi_prime1 = pi_prime[:nr//2]
+        pi_prime2 = pi_prime[nr//2:]
+        error = pi_prime1 - pi_prime2  # (nr//2, ns/1, 2)
+        abs_error = torch.relu(error.abs() - self.threshold)
+        squared_error = torch.mean(torch.pow(abs_error, 2), dim=2)  # (nr//2, ns/1)
+        if self.sfwe:
+            weights1 = weights[:nr//2]  # (nr//2, ns, 1)
+            weights2 = weights[nr//2:]
+            max_weights = torch.maximum(weights1, weights2)
+            ray_loss = torch.sum(max_weights[:, :, 0] * squared_error, dim=1)  # (nr//2, )
+        else:
+            ray_loss = torch.mean(squared_error, dim=1)  # (nr//2, )
+        loss = torch.mean(ray_loss)  # (1, )
+        return loss
+
+
+class DenseFlowLoss(Regularizer):
+    def __init__(self, initial_value, threshold, dfap, dfwe, df_stop_gradient_weights):
+        super().__init__('dense-flow-loss', initial_value)
+        self.threshold = threshold
+        self.dfap = dfap
+        self.dfwe = dfwe
+        self.df_stop_gradient_weights = df_stop_gradient_weights
+        if dfap and dfwe:
+            raise RuntimeError('dense_flow_loss_average_point and dense_flow_loss_weighted_error both cannot be true')
+        return
+
+    def _regularize(self, model: LowrankModel, model_out, data, **kwargs) -> torch.Tensor:
+        df_mask = data['dense_flow_mask']
+        pi_prime = model_out['pi_prime']
+        weights = model_out['weights']
+        if 'sparse_flow_mask' in data:
+            sf_mask = data['sparse_flow_mask']
+            df_mask = df_mask[~sf_mask]
+            pi_prime = pi_prime[~sf_mask]
+            weights = weights[~sf_mask]
+        pi_prime = pi_prime[df_mask]  # (nr, ns, 3)
+        nr, ns = pi_prime.shape[:2]
+        weights = weights[df_mask]  # (nr, ns, 1)
+        if self.df_stop_gradient_weights:
+            weights = weights.detach()
+        if self.dfap:
+            pi_prime = torch.sum(weights * pi_prime, dim=1, keepdim=True)  # (nr, 1, 3)
+
+        pi_prime1 = pi_prime[:nr//2]
+        pi_prime2 = pi_prime[nr//2:]
+        error = pi_prime1 - pi_prime2  # (nr//2, ns/1, 2)
+        abs_error = torch.relu(error.abs() - self.threshold)
+        squared_error = torch.mean(torch.pow(abs_error, 2), dim=2)  # (nr//2, ns/1)
+        if self.dfwe:
+            weights1 = weights[:nr//2]  # (nr//2, ns, 1)
+            weights2 = weights[nr//2:]
+            max_weights = torch.maximum(weights1, weights2)
+            ray_loss = torch.sum(max_weights[:, :, 0] * squared_error, dim=1)  # (nr//2, )
+        else:
+            ray_loss = torch.mean(squared_error, dim=1)  # (nr//2, )
+        loss = torch.mean(ray_loss)  # (1, )
+        return loss
+
+
+class SparseDepthLoss(Regularizer):
+    def __init__(self, initial_value):
+        super().__init__('sparse-depth-loss', initial_value)
+        return
+
+    def _regularize(self, model: LowrankModel, model_out, data, **kwargs) -> torch.Tensor:
+        sd_mask = data['sparse_depth_mask']
+        pred_depth = model_out['depth'][sd_mask]  # (nr, 1)
+        gt_depth = data['sparse_depth'][sd_mask][:, None]  # (nr, 1)
+        loss = torch.mean(torch.square(pred_depth - gt_depth))  # (1, )
+        return loss

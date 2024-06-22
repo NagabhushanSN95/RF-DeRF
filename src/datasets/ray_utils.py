@@ -38,17 +38,24 @@ def create_meshgrid(height: int,
     return xx, yy
 
 
-def stack_camera_dirs(x: torch.Tensor, y: torch.Tensor, intrinsics: Intrinsics, opengl_camera: bool):
+def stack_camera_dirs(x: torch.Tensor, y: torch.Tensor, intrinsics: torch.Tensor, opengl_camera: bool):
     # the direction here is without +0.5 pixel centering as calibration is not so accurate
     # see https://github.com/bmild/nerf/issues/24
-    x = x.float()
-    y = y.float()
-    return torch.stack([
-        (x - intrinsics.center_x) / intrinsics.focal_x,
-        (y - intrinsics.center_y) / intrinsics.focal_y
-        * (-1.0 if opengl_camera else 1.0),
-        torch.full_like(x, fill_value=-1.0 if opengl_camera else 1.0)
-    ], -1)  # (H, W, 3)
+    x = x.float()  # (nr, )
+    y = y.float()  # (nr, )
+    # cam_dirs = torch.stack([
+    #     (x - intrinsics.center_x) / intrinsics.focal_x,
+    #     (y - intrinsics.center_y) / intrinsics.focal_y
+    #     * (-1.0 if opengl_camera else 1.0),
+    #     torch.full_like(x, fill_value=-1.0 if opengl_camera else 1.0)
+    # ], -1)  # (H, W, 3)
+    ones = torch.ones_like(x)  # (nr, )
+    pos_homo = torch.stack([x, y, ones], dim=-1)[..., None]  # (nr, 3, 1)
+    pos_unnormalized = torch.linalg.inv(intrinsics) @ pos_homo  # (nr, 3, 1)
+    if opengl_camera:
+        pos_unnormalized[..., 1:, :] *= -1
+    cam_dirs = pos_unnormalized[..., 0]  # (nr, 3)
+    return cam_dirs
 
 
 def get_ray_directions(intrinsics: Intrinsics, opengl_camera: bool, add_half: bool = True) -> torch.Tensor:
@@ -70,7 +77,8 @@ def get_rays(directions: torch.Tensor,
              c2w: torch.Tensor,
              ndc: bool,
              ndc_near: float = 1.0,
-             intrinsics: Optional[Intrinsics] = None,
+             intrinsics: Optional[torch.Tensor] = None,
+             resolution: Optional[Tuple[int, int]] = None,
              normalize_rd: bool = True):
     """Get ray origin and normalized directions in world coordinate for all pixels in one image.
     Reference: https://www.scratchapixel.com/lessons/3d-basic-rendering/
@@ -82,6 +90,7 @@ def get_rays(directions: torch.Tensor,
         ndc:
         ndc_near:
         intrinsics:
+        resolution:
         normalize_rd:
 
     Returns:
@@ -94,22 +103,23 @@ def get_rays(directions: torch.Tensor,
     ro = torch.broadcast_to(c2w[:, :3, 3], directions.shape)
     if ndc:
         assert intrinsics is not None, "intrinsics must not be None when NDC active."
+        assert resolution is not None, "resolution must not be None when NDC active."
         ro, rd = ndc_rays_blender(
-            intrinsics=intrinsics, near=ndc_near, rays_o=ro, rays_d=rd)
+            intrinsics=intrinsics, resolution=resolution, near=ndc_near, rays_o=ro, rays_d=rd)
     if normalize_rd:
         rd /= torch.linalg.norm(rd, dim=-1, keepdim=True)
     return ro, rd
 
 
-def ndc_rays_blender(intrinsics: Intrinsics, near: float, rays_o: torch.Tensor,
+def ndc_rays_blender(intrinsics: torch.Tensor, resolution: Tuple[int, int], near: float, rays_o: torch.Tensor,
                      rays_d: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
     # Shift ray origins to near plane
     t = -(near + rays_o[..., 2]) / rays_d[..., 2]
     rays_o = rays_o + t[..., None] * rays_d
 
     # Projection
-    ndc_coef_x = - (2 * intrinsics.focal_x) / intrinsics.width
-    ndc_coef_y = - (2 * intrinsics.focal_y) / intrinsics.height
+    ndc_coef_x = - (2 * intrinsics[..., 0, 0]) / resolution[1]
+    ndc_coef_y = - (2 * intrinsics[..., 1, 1]) / resolution[0]
     o0 = ndc_coef_x * rays_o[..., 0] / rays_o[..., 2]
     o1 = ndc_coef_y * rays_o[..., 1] / rays_o[..., 2]
     o2 = 1. + 2. * near / rays_o[..., 2]
