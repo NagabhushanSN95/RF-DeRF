@@ -1,0 +1,18 @@
+name: RF_DeRF
+channels:
+  - defaults
+dependencies:
+  - python=3.10
+  - cuda-toolkit
+  - simplejson
+  - seaborn
+  - pandas
+  - screen
+  - tqdm
+  - scikit-video
+  - deepdiff
+  - scikit-image
+  - matplotlib
+  - tensorboard
+  - configargparse
+prefix: /home/nagabhushan/anaconda3/envs/RF_DeRF

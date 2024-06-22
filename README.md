@@ -1,4 +1,4 @@
-# ReFlow-DyRF
+# RF-DeRF
 Official code release accompanying the SIGGRAPH 2024 paper "Factorized Motion Fields for Fast Sparse Input Dynamic View Synthesis"
 
 * [Project Page](https://nagabhushansn95.github.io/publications/2024/RF-DeRF.html)
@@ -21,7 +21,6 @@ export PYTHONPATH=<ABSOLUTE_PATH_TO_RFDERF_DIR>/src:$PYTHONPATH
 Please follow the instructions in [database_utils/README.md](src/database_utils/README.md) file to set up various databases. Instructions for custom databases are also included here.
 
 ### Generate Priors
-#### Sparse Flow Prior
 Please follow the instructions in [prior_generators/README.md](src/prior_generators/README.md) file to generate sparse flow and dense flow priors.
 
 ## Training and Inference

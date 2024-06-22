@@ -89,7 +89,7 @@ def extract_data(unzipped_dirpath: Path, extracted_dirpath: Path):
 
 
 def demo1():
-    unzipped_dirpath = Path('../../data/all/database_data_unzipped')
+    unzipped_dirpath = Path('../../data/raw/unzipped_data')
     extracted_dirpath = Path('../../data/all/database_data')
     extract_data(unzipped_dirpath, extracted_dirpath)
     return
