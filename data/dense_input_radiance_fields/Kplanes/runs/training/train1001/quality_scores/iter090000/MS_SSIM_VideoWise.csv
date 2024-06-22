@@ -1,0 +1,6 @@
+scene_name,video_num,MS_SSIM
+Birthday,5,0.9494
+Painter,5,0.9839
+Remy,5,0.8307
+Theater,5,0.9591
+Train,5,0.9672
