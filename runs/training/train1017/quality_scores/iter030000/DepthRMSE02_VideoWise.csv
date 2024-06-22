@@ -1,0 +1,6 @@
+scene_name,pred_video_num,DepthRMSE02
+Birthday,5,0.1382
+Painter,5,0.1437
+Remy,5,0.2928
+Theater,5,0.3159
+Train,5,0.1341

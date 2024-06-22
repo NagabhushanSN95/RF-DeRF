@@ -1,0 +1,19 @@
+{
+    "30000": {
+        "DepthMAE01": 0.1643,
+        "DepthMAE11": 0.3771,
+        "DepthRMSE01": 0.2829,
+        "DepthRMSE11": 0.509,
+        "DepthSROCC01": 0.4208,
+        "DepthSROCC11": 0.0179,
+        "LPIPS_Alex": 0.2146,
+        "LPIPS_VGG": 0.3354,
+        "MSE": 0.0039,
+        "MS_SSIM": 0.8785,
+        "PSNR": 25.071,
+        "RMSE": 0.0589,
+        "SSIM": 0.8425,
+        "VMAF01": 58.7662,
+        "VMAF11": 45.8244
+    }
+}

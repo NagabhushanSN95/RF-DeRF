@@ -1,0 +1,6 @@
+scene_name,video_num,RMSE
+Birthday,5,0.1112
+Painter,5,0.0604
+Remy,5,0.1656
+Theater,5,0.1306
+Train,5,0.117

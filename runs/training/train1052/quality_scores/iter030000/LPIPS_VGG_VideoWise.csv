@@ -1,0 +1,6 @@
+scene_name,video_num,LPIPS_VGG
+Birthday,5,0.3462
+Painter,5,0.3144
+Remy,5,0.5319
+Theater,5,0.5037
+Train,5,0.4154

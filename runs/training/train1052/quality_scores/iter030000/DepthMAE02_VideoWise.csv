@@ -1,0 +1,6 @@
+scene_name,pred_video_num,DepthMAE02
+Birthday,5,0.1688
+Painter,5,0.2542
+Remy,5,0.3404
+Theater,5,0.287
+Train,5,0.1124
