@@ -1,8 +1,7 @@
 # Shree KRISHNAya Namaha
 # Downsamples the videos using ffmpeg command line and also saves the corresponding intrinsics
-# Modified from N3DV/data_processors/VideoDownsampler.py
 # Author: Nagabhushan S N
-# Last Modified: 13/01/2024
+# Last Modified: 23/06/2024
 
 import os
 import shutil

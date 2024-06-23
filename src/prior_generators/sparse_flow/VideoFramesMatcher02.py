@@ -2,7 +2,7 @@
 # Runs FrameMatchesComputer on all possible combinations of frames as specified by the configs. Creates PNG frames of
 # all video frames using ffmpeg and copies them to colmap directory using shutil. Compatible with ImagesMatcher04.py
 # Author: Nagabhushan S N
-# Last Modified: 15/11/2023
+# Last Modified: 23/06/2024
 
 import json
 import os

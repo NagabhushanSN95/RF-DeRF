@@ -1,8 +1,7 @@
 # Shree KRISHNAya Namaha
 # Estimates dense flow on N3DV scenes
-# Modified from FEL001/FlowEstimator_N3DV01.py
 # Author: Nagabhushan S N
-# Last Modified: 25/12/2023
+# Last Modified: 23/06/2024
 
 import json
 import time

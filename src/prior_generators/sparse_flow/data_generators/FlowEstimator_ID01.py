@@ -1,8 +1,7 @@
 # Shree KRISHNAya Namaha
 # Estimates sparse flow on InterDigital scenes
-# Modified from FlowEstimator_N3DV01.py
 # Author: Nagabhushan S N
-# Last Modified: 13/01/2024
+# Last Modified: 23/06/2024
 
 import json
 import time

@@ -1,8 +1,7 @@
 # Shree KRISHNAya Namaha
 # RMSE measure between predicted depths and depths from dense input NeRF
-# Modified from DepthRMSE01_N3DV.py
 # Author: Nagabhushan S N
-# Last Modified: 14/01/2024
+# Last Modified: 23/06/2024
 
 import argparse
 import datetime

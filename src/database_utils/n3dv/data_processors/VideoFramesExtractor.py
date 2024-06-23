@@ -1,7 +1,7 @@
 # Shree KRISHNAya Namaha
 # Extracts video frames into png format. Also supports downsampling.
 # Author: Nagabhushan S N
-# Last Modified: 13/11/2023
+# Last Modified: 23/06/2024
 
 import os
 import shutil

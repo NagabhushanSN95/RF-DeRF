@@ -2,7 +2,7 @@
 # Uses every 8th frame as the test frame as per the usual convention. Among the remaining frames, divides them into
 # n+1 groups and picks n frames at the intersections
 # Author: Nagabhushan S N
-# Last Modified: 30/12/22
+# Last Modified: 23/06/2024
 
 import time
 import datetime

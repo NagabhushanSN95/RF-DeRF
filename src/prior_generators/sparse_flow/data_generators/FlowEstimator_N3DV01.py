@@ -1,8 +1,7 @@
 # Shree KRISHNAya Namaha
 # Estimates sparse flow on N3DV scenes
-# Modified from R19_SSLN/DEL001/DepthEstimator02_NeRF_LLFF.py
 # Author: Nagabhushan S N
-# Last Modified: 15/11/2023
+# Last Modified: 23/06/2024
 
 import json
 import time

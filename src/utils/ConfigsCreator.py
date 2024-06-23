@@ -1,7 +1,7 @@
 # Shree KRISHNAya Namaha
 # Takes Configs.py and creates new configs file in scene_name for every scene. This can then be used by bash file to call individual train and test commands.
 # Author: Nagabhushan S N
-# Last Modified: 30/10/2023
+# Last Modified: 23/06/2024
 
 import argparse
 import importlib

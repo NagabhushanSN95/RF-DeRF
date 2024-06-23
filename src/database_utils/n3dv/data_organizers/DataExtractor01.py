@@ -1,7 +1,7 @@
 # Shree KRISHNAya Namaha
 # Extracts rgb frames, camera intrinsics and extrisics
 # Author: Nagabhushan S N
-# Last Modified: 07/03/2023
+# Last Modified: 23/06/2024
 
 import os
 import shutil

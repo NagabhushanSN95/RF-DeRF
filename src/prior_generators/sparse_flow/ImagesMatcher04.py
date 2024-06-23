@@ -3,7 +3,7 @@
 # Extended from ImagesMatcher03.py and supports copying images given their paths instead of writing them to disk from
 # RAM. Compatible with VideoFramesMatcher02.py.
 # Author: Nagabhushan S N, Harsha Mupparaju
-# Last Modified: 15/11/2023
+# Last Modified: 23/06/2024
 
 import os
 import shutil

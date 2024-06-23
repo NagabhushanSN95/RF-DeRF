@@ -1,8 +1,7 @@
 # Shree KRISHNAya Namaha
 # SROCC measure between predicted depths and depths from dense input NeRF
-# Modified from QA11/DepthRMSE01_N3DV.py
 # Author: Nagabhushan S N
-# Last Modified: 28/12/2023
+# Last Modified: 23/06/2024
 
 import argparse
 import datetime
